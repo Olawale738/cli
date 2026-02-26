@@ -34,7 +34,7 @@ class DatabaseService {
   }
 
   async initialize(config?: DatabaseConfig): Promise<void> {
-    const connectionString = config?.connectionString || process.env.DATABASE_URL;
+    const connectionString = config?.connectionString || process.env['DATABASE_URL'];
 
     if (!connectionString) {
       console.warn('[DatabaseService] No DATABASE_URL provided. Database will not be available.');
@@ -209,47 +209,50 @@ class DatabaseService {
       const message: MessageRecord = {
         id: msgRow.message_id,
         timestamp: msgRow.timestamp,
-        type: msgRow.message_type,
+        type: msgRow.message_type as 'user' | 'gemini',
         content: msgRow.content,
       };
 
-      if (msgRow.tokens_total !== null) {
-        message.tokens = {
-          input: msgRow.tokens_input || 0,
-          output: msgRow.tokens_output || 0,
-          cached: msgRow.tokens_cached || 0,
-          thoughts: msgRow.tokens_thoughts || undefined,
-          tool: msgRow.tokens_tool || undefined,
-          total: msgRow.tokens_total || 0,
-        };
-      }
+      // Only add gemini-specific properties if it's a gemini message
+      if (msgRow.message_type === 'gemini') {
+        if (msgRow.tokens_total !== null) {
+          (message as any).tokens = {
+            input: msgRow.tokens_input || 0,
+            output: msgRow.tokens_output || 0,
+            cached: msgRow.tokens_cached || 0,
+            thoughts: msgRow.tokens_thoughts || undefined,
+            tool: msgRow.tokens_tool || undefined,
+            total: msgRow.tokens_total || 0,
+          };
+        }
 
-      if (msgRow.model) {
-        message.model = msgRow.model;
-      }
+        if (msgRow.model) {
+          (message as any).model = msgRow.model;
+        }
 
-      if (toolCallsResult.rows.length > 0) {
-        message.toolCalls = toolCallsResult.rows.map((tc) => ({
-          id: tc.tool_call_id,
-          name: tc.tool_name,
-          args: tc.tool_args || {},
-          result: tc.tool_result,
-          status: tc.tool_status,
-          timestamp: tc.timestamp,
-          displayName: tc.display_name,
-          description: tc.description,
-          resultDisplay: tc.result_display,
-          renderOutputAsMarkdown: tc.render_output_as_markdown,
-        }));
-      }
+        if (toolCallsResult.rows.length > 0) {
+          (message as any).toolCalls = toolCallsResult.rows.map((tc: any) => ({
+            id: tc.tool_call_id,
+            name: tc.tool_name,
+            args: tc.tool_args || {},
+            result: tc.tool_result,
+            status: tc.tool_status,
+            timestamp: tc.timestamp,
+            displayName: tc.display_name,
+            description: tc.description,
+            resultDisplay: tc.result_display,
+            renderOutputAsMarkdown: tc.render_output_as_markdown,
+          }));
+        }
 
-      if (thoughtsResult.rows.length > 0) {
-        message.thoughts = thoughtsResult.rows.map((t) => ({
-          thoughtId: t.thought_id,
-          thoughtType: t.thought_type,
-          content: t.content,
-          timestamp: t.timestamp,
-        }));
+        if (thoughtsResult.rows.length > 0) {
+          (message as any).thoughts = thoughtsResult.rows.map((t: any) => ({
+            thoughtId: t.thought_id,
+            thoughtType: t.thought_type,
+            content: t.content,
+            timestamp: t.timestamp,
+          }));
+        }
       }
 
       messages.push(message);
@@ -267,6 +270,9 @@ class DatabaseService {
   async saveMessage(sessionId: string, message: MessageRecord): Promise<void> {
     if (!this.pool) throw new Error('Database not initialized');
 
+    // Cast to any to access gemini-specific properties
+    const msg = message as any;
+
     // Insert message
     const messageQuery = `
       INSERT INTO messages (session_id, message_id, message_type, content, timestamp, 
@@ -278,7 +284,7 @@ class DatabaseService {
         tokens_output = EXCLUDED.tokens_output,
         tokens_cached = EXCLUDED.tokens_cached,
         tokens_thoughts = EXCLUDED.tokens_thoughts,
-        tokens_tool = EXCLUDED.t_tokens_tool,
+        tokens_tool = EXCLUDED.tokens_tool,
         tokens_total = EXCLUDED.tokens_total
     `;
 
@@ -288,18 +294,18 @@ class DatabaseService {
       message.type,
       message.content,
       new Date(message.timestamp),
-      message.tokens?.input || null,
-      message.tokens?.output || null,
-      message.tokens?.cached || null,
-      message.tokens?.thoughts || null,
-      message.tokens?.tool || null,
-      message.tokens?.total || null,
-      message.model || null,
+      msg.tokens?.input || null,
+      msg.tokens?.output || null,
+      msg.tokens?.cached || null,
+      msg.tokens?.thoughts || null,
+      msg.tokens?.tool || null,
+      msg.tokens?.total || null,
+      msg.model || null,
     ]);
 
     // Save tool calls if present
-    if (message.toolCalls) {
-      for (const tc of message.toolCalls) {
+    if (msg.toolCalls) {
+      for (const tc of msg.toolCalls) {
         const toolCallQuery = `
           INSERT INTO tool_calls (message_id, tool_call_id, tool_name, tool_args, tool_result, 
             tool_status, display_name, description, result_display, render_output_as_markdown)
@@ -325,8 +331,8 @@ class DatabaseService {
     }
 
     // Save thoughts if present
-    if (message.thoughts) {
-      for (const thought of message.thoughts) {
+    if (msg.thoughts) {
+      for (const thought of msg.thoughts) {
         const thoughtQuery = `
           INSERT INTO thoughts (message_id, thought_id, thought_type, content, timestamp)
           VALUES ($1, $2, $3, $4, $5)
